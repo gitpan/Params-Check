@@ -1,5 +1,11 @@
-Changes for 0.20    Thu Jun 17 19:33:41  2004
-=============================================
+Changes for 0.21    Fri Jun 18 18:38:21 2004
+============================================
+
+* Make template defaults of '' (empty string)
+    work as they should.
+
+Changes for 0.20    Thu Jun 17 19:33:41 2004
+============================================
 
 * ground up rewrite of both code and tests
     to improve performance

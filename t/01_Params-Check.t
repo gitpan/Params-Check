@@ -214,7 +214,7 @@ for my $thing (1,'foo',[1]) {
 }
 
 ### check + allow tests ###
-{    ### check if the subs for allow get what you expect ###
+{   ### check if the subs for allow get what you expect ###
     for my $thing (1,'foo',[1]) {
         my $tmpl = {
             foo => { allow =>
@@ -226,6 +226,19 @@ for my $thing (1,'foo',[1]) {
         my $rv = check( $tmpl, { foo => $thing } );
          ok( $rv,                    "check() call using allow key" );  
     }
+}
+
+### edge case tests ###
+{   ### if key is not provided, and value is '', will P::C treat
+    ### that correctly? 
+    my $tmpl = { foo => { default => '' } };
+    my $rv   = check( $tmpl, {} );
+    
+    ok( $rv,                    "check() call with default = ''" );
+    ok( exists $rv->{foo},      "   rv exists" );
+    ok( defined $rv->{foo},     "   rv defined" );
+    ok( !$rv->{foo},            "   rv false" );
+    is( $rv->{foo}, '',         "   rv = '' " );
 }
 
 ### big template test ###

@@ -18,7 +18,7 @@ BEGIN {
     @ISA        =   qw[ Exporter ];
     @EXPORT_OK  =   qw[check allow last_error];
     
-    $VERSION                = '0.20';
+    $VERSION                = '0.21';
     $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
@@ -476,7 +476,8 @@ sub _sanity_check_and_defaults {
         }
         
         ### next, set the default, make sure the key exists in %defs ###
-        $defs{$key} = $utmpl{$key}->{'default'} || undef;
+        $defs{$key} = $utmpl{$key}->{'default'} 
+                        if exists $utmpl{$key}->{'default'};
 
         if( $SANITY_CHECK_TEMPLATE ) {
             ### last, check if they provided any weird template keys 
