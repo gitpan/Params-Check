@@ -9,23 +9,25 @@ BEGIN {
     use Exporter    ();
     use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE $ALLOW_UNKNOWN 
                         $STRICT_TYPE $STRIP_LEADING_DASHES $NO_DUPLICATES
-                        $PRESERVE_CASE 
+                        $PRESERVE_CASE $ONLY_ALLOW_DEFINED
                     ];
 
     @ISA        =   qw[ Exporter ];
     @EXPORT_OK  =   qw[check allow last_error];
     
-    $VERSION                = 0.05;
+    $VERSION                = 0.06;
     $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
     $STRICT_TYPE            = 0;
     $ALLOW_UNKNOWN          = 0;
     $PRESERVE_CASE          = 0;
+    $ONLY_ALLOW_DEFINED     = 0;
 }
 
 
-my @known_keys = qw|required allow default strict_type no_override store|;
+my @known_keys =    qw| required allow default strict_type no_override store
+                        defined |;
 
 sub check {
     my $utmpl   = shift;
@@ -33,7 +35,7 @@ sub check {
     my $verbose = shift || $VERBOSE || 0;
     
     ### reset the error string ###
-    _clear_error();
+    _clear_error(); 
 
     ### check for weird things in the template and warn
     ### also convert template keys to lowercase if required
@@ -114,12 +116,23 @@ sub check {
             ### flag to set if the value was of a wrong type ###
             my $wrong;
 
+            my $must_be_defined =   $tmpl->{$key}->{'defined'} || 
+                                    $ONLY_ALLOW_DEFINED || 0;
+            if( $must_be_defined ) {
+                $wrong++ if not defined $args->{$key};
+            }
+
             if( exists $tmpl->{$key}->{allow} ) {
-                $wrong++ unless allow( $args->{$key}, $tmpl->{$key}->{allow} );
+                
+                $wrong++ unless allow(  $args->{$key}, 
+                                        $tmpl->{$key}->{allow},
+                                        $must_be_defined,
+                                    );
             }
 
             if( $STRICT_TYPE || $tmpl->{$key}->{strict_type} ) {
-                $wrong++ unless ref $args->{$key} eq ref $tmpl->{$key}->{default};
+                $wrong++ unless ref $args->{$key} eq 
+                                ref $tmpl->{$key}->{default};
             }
 
             ### somehow it's the wrong type.. warn for this! ###
@@ -153,9 +166,9 @@ sub check {
 }
 
 sub allow {
-    my $val     = shift;
-    my $aref    = shift;
-    
+    my $val                 = shift;
+    my $aref                = shift;
+
     my $wrong;
 
     ### it's a string it must equal ###
@@ -406,7 +419,7 @@ Params::Check -- A generic input parsing/checking mechanism.
         my $x;
         
         my $tmpl = {
-            firstname   => { required   => 1, },
+            firstname   => { required   => 1, defined => 1 },
             lastname    => { required   => 1, store => \$x },
             gender      => { required   => 1,
                              allow      => [qr/M/i, qr/F/i],
@@ -533,6 +546,14 @@ This is basically shorthand for saying:
 You can alter the global variable $Params::Check::NO_DUPLICATES to
 control whether the C<store>'d key will still be present in your 
 result yet. See the L<Global Variables> section below.
+
+=item defined
+
+If this template key is true, enforces that if this key is provided by
+user input, it's value is C<defined>. This just means that the user is
+not allowed to pass C<undef> as a value for this key and is equivalent
+to:
+    allow => sub { defined +shift && OTHER TESTS }
 
 =item allow
 
@@ -685,6 +706,14 @@ similar keys with different casing in your templates.
 
 Understand that this removes the case-insensitivy feature of this
 module. Default is 0;
+
+=head2 $Params::Check::ONLY_ALLOW_DEFINED
+
+If set to true, L<Params::Check> will require all values passed to be
+C<defined>. If you wish to enable this on a 'per key' basis, use the
+template option C<defined> instead.
+
+Default is 0;
 
 =head1 AUTHOR
 

@@ -1,7 +1,7 @@
 ### Params::Check test suite ###
 
 use strict;
-use Test::More tests => 45;
+use Test::More tests => 49;
 
 $^W=1;
 
@@ -271,7 +271,7 @@ sub valid_phone {
     push @{$utmpl->{married}->{allow}}, undef;
     $hash->{married} = 'foo';
     my $args = check( $utmpl, $hash );
-warn Params::Check->last_error;
+
     is ( $args, undef,      'Allow based on undef' );
     unlike( $warning, qr/uninitialized value/,         
                             '   undef did not generate a warning' );
@@ -309,17 +309,35 @@ warn Params::Check->last_error;
         my $state =  $_ ? "" : " not";
     
         my $rv = check( $tmpl, $try );
-        is_deeply( $rv, $expect,   "Check while". $state ." preserving case" ); 
+        is_deeply( $rv, $expect, "Check while". $state ." preserving case" ); 
     }               
 }
+
+### defined check/$ONLY_ALLOW_DEFINED tests ###
+{
+    {   my $utmpl   = { key => { defined => 1 } };
+        my $rv      = check( $utmpl, { key => undef } );
+
+        ok(!$rv, q[undef value not allowed when 'defined' is enabled]);
+    }
+    {   local $Params::Check::ONLY_ALLOW_DEFINED = 1;
+        my $utmpl   = { key => { default => 1 } };
+        my $rv      = check( $utmpl, { key => undef } );
+        
+        ok(!$rv, q[undef value not allowed if '$ONLY_ALLOW_DEFINED' is true]);
+    }
+}
+
 
 ### allow tests ###
 ok( allow( 42, qr/^\d+$/ ), "Allow based on regex" );
 ok( allow( $0, $0),         "   Allow based on string" );
 ok( allow( 42, [0,42] ),    "   Allow based on list" );
+ok( allow( 42, [50,sub{1}]),"   Allow based on list containing sub");
 ok(!allow( $0, qr/^\d+$/ ), "Disallowing based on regex" );
 ok(!allow( 42, $0 ),        "   Disallowing based on string" );
 ok(!allow( 42, [0,$0] ),    "   Disallowing based on list" );
+ok(!allow( 42, [50,sub{0}]),"   Disallowing based on list containing sub");
 
 
 
