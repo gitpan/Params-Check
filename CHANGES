@@ -1,3 +1,11 @@
+Changes for 0.04    Thu Sep 18 13:41:48 2003
+============================================
+
+* Use carp to get a better caller perspective
+* add the last_error() routine
+* add the allow() routine
+
+
 Changes for 0.03    Wed May 14 14:33:17 2003
 ============================================
 

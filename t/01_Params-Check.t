@@ -1,7 +1,7 @@
 ### Params::Check test suite ###
 
 use strict;
-use Test::More tests => 30;
+use Test::More tests => 45;
 
 $^W=1;
 
@@ -10,7 +10,7 @@ BEGIN {
     use_ok( 'Params::Check' ) or diag "Check.pm not found.  Dying", die;
 
     ### need to explicitly import 'check', use_ok cannot import.
-    Params::Check->import('check');
+    Params::Check->import(qw[check last_error allow]);
 }
 
 ### make sure it's verbose, good for debugging ###
@@ -30,8 +30,7 @@ my $tmpl = {
                     strict_type => 1
                 },
     phone       => { allow      => sub {
-                                    my %args = @_;
-                                    return 1 if &valid_phone( $args{phone} );
+                                    return 1 if &valid_phone( @_ );
                                 }
                 },
     bureau      => { default    => 'NSA',
@@ -57,7 +56,7 @@ my $default = {
 };
 
 sub valid_phone {
-    my $num = shift;
+    my $num = pop;
 
     ### dutch phone numbers are 10 digits ###
     $num =~ s/[\s-]//g;
@@ -80,8 +79,10 @@ sub valid_phone {
     delete $hash->{gender};
 
     my $args = check( $tmpl, $hash );
-
     is($args, undef, "Missing required field");
+    like(last_error(), qr/^Required option 'gender' is not provided/,
+            "Error string as expected" );
+
 }
 
 ### remove non-template keys ###
@@ -92,10 +93,14 @@ sub valid_phone {
     my $args = check( $tmpl, $hash );
 
     is_deeply($args, $default, q[Non-mentioned key keys are ignored]);
+    like( last_error(), qr/^Key 'nonexistant' is not a valid key/,
+            "Error string as expected" );  
 
     {   local $Params::Check::ALLOW_UNKNOWN = 1;
         $args = check ( $tmpl, $hash );
-        is( $args->{nonexistant}, $hash->{nonexistant}, q[  Except when told not to] );
+        is( $args->{nonexistant}, $hash->{nonexistant}, 
+            q[  Except when told not to] );
+        is( last_error(), "", "Error string as expected" );  
     }         
 }
 
@@ -115,8 +120,9 @@ sub valid_phone {
     $hash->{ID_LIST} = {};
 
     my $args = check( $tmpl, $hash );
-
     is($args, undef, q[Enforcing strict type]);
+    like( last_error(), qr/^Key 'id_list' is of invalid type/,
+            "Error string as expected" );
 }
 
 ### check 'no_override' ###
@@ -129,6 +135,9 @@ sub valid_phone {
     is( $args->{bureau}, $default->{bureau},
         q[Can not change keys marked with 'no_override']
     );
+    like( last_error(), qr/^You are not allowed to override key 'bureau'/,
+            "Error string as expected" );
+
 }
 
 ### check 'allow' ####
@@ -146,8 +155,9 @@ sub valid_phone {
     $hash->{phone} = '010 - 123456789';
 
     my $args = check( $tmpl, $hash );
-
     is($args, undef, q[Disallowing based on subroutine]);
+    like( last_error(), qr/^Key 'phone' is of invalid type/,
+            "Error string as expected" );
 }
 
 {
@@ -164,8 +174,9 @@ sub valid_phone {
     $hash->{age} = 'fifty';
 
     my $args = check( $tmpl, $hash );
-
     is($args, undef, q[Disallowing based on regex]);
+    like( last_error(), qr/^Key 'age' is of invalid type/,
+            "Error string as expected" );
 }
 
 {
@@ -182,8 +193,9 @@ sub valid_phone {
     $hash->{married} = 2;
 
     my $args = check( $tmpl, $hash );
-
     is($args, undef, q[Disallowing based on a list]);
+    like( last_error(), qr/^Key 'married' is of invalid type/,
+            "Error string as expected" );
 }
 
 {
@@ -200,13 +212,13 @@ sub valid_phone {
     $hash->{gender} = 'K';
 
     my $args = check( $tmpl, $hash );
-
     is($args, undef, q[Disallowing based on list of regexes]);
+    like( last_error(), qr/^Key 'gender' is of invalid type/,
+            "Error string as expected" );
 }
 
 
 ### checks if 'undef' is being treated correctly ###
-
 {
     my $utmpl = {%$tmpl};
     my $hash  = {%$standard};
@@ -259,7 +271,7 @@ sub valid_phone {
     push @{$utmpl->{married}->{allow}}, undef;
     $hash->{married} = 'foo';
     my $args = check( $utmpl, $hash );
-
+warn Params::Check->last_error;
     is ( $args, undef,      'Allow based on undef' );
     unlike( $warning, qr/uninitialized value/,         
                             '   undef did not generate a warning' );
@@ -300,6 +312,14 @@ sub valid_phone {
         is_deeply( $rv, $expect,   "Check while". $state ." preserving case" ); 
     }               
 }
+
+### allow tests ###
+ok( allow( 42, qr/^\d+$/ ), "Allow based on regex" );
+ok( allow( $0, $0),         "   Allow based on string" );
+ok( allow( 42, [0,42] ),    "   Allow based on list" );
+ok(!allow( $0, qr/^\d+$/ ), "Disallowing based on regex" );
+ok(!allow( 42, $0 ),        "   Disallowing based on string" );
+ok(!allow( 42, [0,$0] ),    "   Disallowing based on list" );
 
 
 

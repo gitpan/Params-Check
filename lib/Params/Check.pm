@@ -9,13 +9,13 @@ BEGIN {
     use Exporter    ();
     use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE $ALLOW_UNKNOWN 
                         $STRICT_TYPE $STRIP_LEADING_DASHES $NO_DUPLICATES
-                        $PRESERVE_CASE
+                        $PRESERVE_CASE 
                     ];
 
     @ISA        =   qw[ Exporter ];
-    @EXPORT_OK  =   qw[check];
+    @EXPORT_OK  =   qw[check allow last_error];
     
-    $VERSION                = 0.03;
+    $VERSION                = 0.04;
     $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
@@ -31,6 +31,9 @@ sub check {
     my $utmpl   = shift;
     my $href    = shift;
     my $verbose = shift || $VERBOSE || 0;
+    
+    ### reset the error string ###
+    _clear_error();
 
     ### check for weird things in the template and warn
     ### also convert template keys to lowercase if required
@@ -49,9 +52,11 @@ sub check {
     
         } else {
             if ( scalar @$href % 2) {
-                carp loc(qq[Uneven number of arguments passed to %1], _who_was_it())
-                    if $verbose;
-                return undef;
+                _store_error(
+                    loc(qq[Uneven number of arguments passed to %1], _who_was_it()),
+                    $verbose
+                );     
+                return;
             }
             
             my %realargs = @$href;
@@ -68,13 +73,15 @@ sub check {
         my $rv = _hasreq( $key, $tmpl, $args );
 
         unless( $rv ) {
-            carp loc("Required option '%1' is not provided for %2 by %3",
-                        $key, _who_was_it(), _who_was_it(1),
-                    ) if $verbose;
+            _store_error(
+                loc("Required option '%1' is not provided for %2 by %3",
+                    $key, _who_was_it(), _who_was_it(1)),
+                $verbose
+            );              
             $flag++;
         }
     }
-    return undef if $flag;
+    return if $flag;
 
     ### set defaults for all arguments ###
     my $defs = _hashdefs($tmpl);
@@ -86,16 +93,20 @@ sub check {
             if( $ALLOW_UNKNOWN ) {
                 $defs->{$key} = $args->{$key} if exists $args->{$key};
             } else {
-                carp loc("Key '%1' is not a valid key for %2 provided by %3",
-                        $key, _who_was_it(), _who_was_it(1)
-                    ) if $verbose;
+                _store_error(
+                    loc("Key '%1' is not a valid key for %2 provided by %3",
+                        $key, _who_was_it(), _who_was_it(1)),
+                    $verbose
+                );      
                 next;
             }
 
         } elsif ( $tmpl->{$key}->{no_override} ) {
-            carp loc( qq[You are not allowed to override key '%1' for %2 from %3],
-                        $key, _who_was_it(), _who_was_it(1)
-                    ) if $verbose;
+            _store_error(
+                loc( qq[You are not allowed to override key '%1' for %2 from %3],
+                    $key, _who_was_it(), _who_was_it(1)),
+                $verbose
+            );     
             next;
         } else {
 
@@ -103,31 +114,7 @@ sub check {
             my $wrong;
 
             if( exists $tmpl->{$key}->{allow} ) {
-
-                my $what = $tmpl->{$key}->{allow};
-
-                ### it's a string it must equal ###
-                ### this breaks for digits =/
-                unless ( ref $what ) {
-                    $wrong++ unless _safe_eq( $args->{$key}, $what );
-
-                } elsif ( ref $what eq 'Regexp' ) {
-                    $wrong++ unless $args->{$key} =~ /$what/;
-
-                } elsif ( ref $what eq 'ARRAY' ) {
-                    $wrong++ unless grep { ref $_ eq 'Regexp'
-                                                ? $args->{$key} =~ /$_/
-                                                : _safe_eq($args->{$key}, $_)
-                                         } @$what;
-
-                } elsif ( ref $what eq 'CODE' ) {
-                    $wrong++ unless $what->( $key => $args->{$key} );
-
-                } else {
-                    carp loc(qq[Can not do allow checking based on a %1 for %2],
-                                ref $what, _who_was_it()
-                            );
-                }
+                $wrong++ unless allow( $args->{$key}, $tmpl->{$key}->{allow} );
             }
 
             if( $STRICT_TYPE || $tmpl->{$key}->{strict_type} ) {
@@ -136,9 +123,11 @@ sub check {
 
             ### somehow it's the wrong type.. warn for this! ###
             if( $wrong ) {
-                carp loc( qq[Key '%1' is of invalid type for %2 provided by %3],
-                            $key, _who_was_it(), _who_was_it(1)
-                        ) if $verbose;
+                _store_error(
+                    loc(qq[Key '%1' is of invalid type for %2 provided by %3],
+                        $key, _who_was_it(), _who_was_it(1)),
+                    $verbose
+                );     
                 ++$flag && next;
 
             } else {
@@ -146,21 +135,53 @@ sub check {
                 ### if we got here, it's apparently an ok value for $key,
                 ### so we'll set it in the default to return it in a bit
                 
-                my $store;
-                if( my $scalar = $tmpl->{$key}->{store} ) {
-                    $$scalar = $args->{$key};
-                    $store++;
-                }
-                           
-                $defs->{$key} = $args->{$key} unless $store && $NO_DUPLICATES;
-                
+                $defs->{$key} = $args->{$key};
             }
-
         }
     }
 
+    ### check if we need to store ###
+    for my $key ( keys %$defs ) {
+        if( my $scalar = $tmpl->{$key}->{store} ) {
+            $$scalar = $defs->{$key};
+            delete $defs->{$key} if $NO_DUPLICATES;
+        }
+    }              
+
     return $flag ? undef : $defs;
 }
+
+sub allow {
+    my $val     = shift;
+    my $aref    = shift or return;
+    
+    my $wrong;
+
+    ### it's a string it must equal ###
+    ### this breaks for digits =/
+    unless ( ref $aref ) {
+        $wrong++ unless _safe_eq( $val, $aref );
+
+    } elsif ( ref $aref eq 'Regexp' ) {
+        $wrong++ unless $val =~ /$aref/;
+
+    } elsif ( ref $aref eq 'ARRAY' ) {
+        $wrong++ unless grep { ref $_ eq 'Regexp'
+                                    ? $val =~ /$_/
+                                    : _safe_eq($val, $_)
+                             } @$aref;
+
+    } elsif ( ref $aref eq 'CODE' ) {
+        $wrong++ unless $aref->( $val );
+
+    } else {
+        _store_error(
+            loc(qq[Can not do allow checking based on a %1 for %2],
+                ref $aref, _who_was_it()), 1
+        );
+    }
+    return !$wrong;
+}    
 
 ### Like check_array, but tmpl is an array and arguments can be given
 ### in a positional way; the tmpl order is the argument order.
@@ -168,6 +189,9 @@ sub check_positional {
     my $atmpl   = shift;
     my $aref    = shift;
     my $verbose = shift || $VERBOSE || 0;
+
+    ### reset the error string ###
+    _clear_error();
 
     my %args;
     {
@@ -181,9 +205,10 @@ sub check_positional {
             while (($key, $item) = each %{ $aref->[0] }) {
                 $key = _canon_key($key);
                 if ($syn->{$key}) {
-                    # XXX Make this nonfatal ?
-                    carp loc( qq[Synonym used in call to %1], _who_was_it() )
-                        if $verbose;
+                    _store_error(
+                        loc( qq[Synonym used in call to %1], _who_was_it() ),
+                        $verbose
+                    );     
                     $key = $syn->{$key};
                 }
                 $args{$key} = $item;
@@ -196,9 +221,10 @@ sub check_positional {
             while (my $key = (shift @$aref)) {
                 $key = _canon_key($key);
                 if ($syn->{$key}) {
-                    # XXX Make this nonfatal ?
-                    carp loc( qq[Synonym used in call to %1], _who_was_it() )
-                        if $verbose;
+                    _store_error(
+                        loc( qq[Synonym used in call to %1], _who_was_it() ),
+                        $verbose
+                    );     
                     $key = $syn->{$key};
                 }
                 $args{_convert_case($key)} = shift @$aref;
@@ -209,8 +235,11 @@ sub check_positional {
                 my $item = shift @$aref;
                 my $key = shift @$pos;
                 if (!$key) {
-                    carp loc( qq[Too many positional arguments for %1] ,
-                            _who_was_it() ) if $verbose;
+                    _store_error(
+                        loc( qq[Too many positional arguments for %1] ,
+                            _who_was_it() ),
+                        $verbose,
+                    );
                     
                     ### We ran out of positional arguments, no sense in
                     ### continuing on.
@@ -318,7 +347,9 @@ sub _sanity_check {
     while( my($key,$href) = each %$tmpl ) {
         for my $type ( keys %$href ) {
             unless( grep { $type eq $_ } @known_keys ) {
-                warn loc(q|Template type '%1' not supported [at key '%2']|, $type, $key);
+                _store_error(
+                    loc(q|Template type '%1' not supported [at key '%2']|, $type, $key), 1, 1
+                );     
             }               
         }
         $rv->{_convert_case($key)} = $href;
@@ -332,6 +363,28 @@ sub _convert_case {
     return $PRESERVE_CASE ? $key : lc $key;
 }
 
+{   my $ErrorString = '';
+
+    sub _store_error {
+        my $err     = shift;
+        my $verbose = shift || 0;
+        my $offset  = shift || 0;
+        my $level   = 1 + $offset;
+    
+        local $Carp::CarpLevel = $level;
+        
+        carp $err if $verbose;
+        
+        $ErrorString .= $err . "\n";
+    }
+    
+    sub _clear_error {
+        $ErrorString = '';
+    }
+    
+    sub last_error { $ErrorString }    
+}
+
 1;
 
 __END__
@@ -340,7 +393,7 @@ __END__
 
 =head1 NAME
 
-Params::Check;
+Params::Check -- A generic input parsing/checking mechanism. 
 
 =head1 SYNOPSIS
 
@@ -514,8 +567,6 @@ to pass and the argument accepted.
 
 =head2 check
 
-Params::Check only has one function, which is called C<check>.
-
 This function is not exported by default, so you'll have to ask for it
 via:
 
@@ -543,7 +594,7 @@ about whant went wrong in a check or not.
 
 =back
 
-C<check> will return undef when it fails, or a hashref with lowercase
+C<check> will return when it fails, or a hashref with lowercase
 keys of parsed arguments when it succeeds.
 
 So a typical call to check would look like this:
@@ -551,6 +602,30 @@ So a typical call to check would look like this:
     my $parsed = check( \%template, \%arguments, $VERBOSE )
                     or warn q[Arguments could not be parsed!];
 
+=head2 allow()
+
+The function that handles the C<allow> key in the template is also
+available for independant use. 
+
+A typical call would look like this:
+
+    my $ok = allow( $test_me, \@criteria );
+
+The function takes as first argument a key to test against, and
+as second argument any form of criteria that are also allowed by 
+the C<allow> key in the template.
+
+It returns true if the key matched the criteria, or false otherwise.    
+    
+=head2 last_error()
+
+Returns a string containing all warnings and errors reported during
+the last time C<check> was called.
+
+This is useful if you want to report then some other way than 
+C<carp>'ing when the verbose flag is on.
+
+It is exported upon request.
 
 =head1 Global Variables
 
@@ -603,7 +678,7 @@ case the template provided. This is useful when you want to use
 similar keys with different casing in your templates.
 
 Understand that this removes the case-insensitivy feature of this
-module. Default is 1;
+module. Default is 0;
 
 =head1 AUTHOR
 
