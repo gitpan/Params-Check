@@ -1,3 +1,9 @@
+Changes for 0.20    Thu Jun 17 19:33:41  2004
+=============================================
+
+* ground up rewrite of both code and tests
+    to improve performance
+
 Changes for 0.07    Thu Feb 25 11:14:48 2004
 ============================================
 

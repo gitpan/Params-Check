@@ -2,20 +2,23 @@ package Params::Check;
 
 use strict;
 
-use Carp qw[carp];
-use Locale::Maketext::Simple Style => 'gettext';
+use Carp                        qw[carp];
+use Locale::Maketext::Simple    Style => 'gettext';
+
+use Data::Dumper;
 
 BEGIN {
     use Exporter    ();
     use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE $ALLOW_UNKNOWN 
                         $STRICT_TYPE $STRIP_LEADING_DASHES $NO_DUPLICATES
-                        $PRESERVE_CASE $ONLY_ALLOW_DEFINED
+                        $PRESERVE_CASE $ONLY_ALLOW_DEFINED     
+                        $SANITY_CHECK_TEMPLATE
                     ];
 
     @ISA        =   qw[ Exporter ];
     @EXPORT_OK  =   qw[check allow last_error];
     
-    $VERSION                = 0.07;
+    $VERSION                = '0.20';
     $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
@@ -23,386 +26,13 @@ BEGIN {
     $ALLOW_UNKNOWN          = 0;
     $PRESERVE_CASE          = 0;
     $ONLY_ALLOW_DEFINED     = 0;
+    $SANITY_CHECK_TEMPLATE  = 1;
 }
 
+my %known_keys = map { $_ => 1 }
+                    qw| required allow default strict_type no_override 
+                        store defined |;
 
-my @known_keys =    qw| required allow default strict_type no_override store
-                        defined |;
-
-sub check {
-    my $utmpl   = shift;
-    my $href    = shift;
-    my $verbose = shift || $VERBOSE || 0;
-    
-    ### reset the error string ###
-    _clear_error(); 
-
-    ### check for weird things in the template and warn
-    ### also convert template keys to lowercase if required
-    my $tmpl = _sanity_check($utmpl);
-
-    ### lowercase all args, and handle both hashes and hashrefs ###
-    my $args = {};
-    if (ref($href) eq 'HASH') {
-        %$args = map { _canon_key($_), $href->{$_} } keys %$href;
-    
-    } elsif (ref($href) eq 'ARRAY') {
-    
-        if (@$href == 1 && ref($href->[0]) eq 'HASH') {
-            %$args = map { _canon_key($_), $href->[0]->{$_}}
-                keys %{ $href->[0] };
-    
-        } else {
-            if ( scalar @$href % 2) {
-                _store_error(
-                    loc(qq[Uneven number of arguments passed to %1], 
-                            _who_was_it()),
-                    $verbose
-                );     
-                return;
-            }
-            
-            my %realargs = @$href;
-            %$args = map { _canon_key($_), $realargs{$_} } keys %realargs;
-        }
-    }
-
-    ### flag to set if something went wrong ###
-    my $flag;
-
-    for my $key ( keys %$tmpl ) {
-
-        ### check if the required keys have been entered ###
-        my $rv = _hasreq( $key, $tmpl, $args );
-
-        unless( $rv ) {
-            _store_error(
-                loc("Required option '%1' is not provided for %2 by %3",
-                    $key, _who_was_it(), _who_was_it(1)),
-                $verbose
-            );              
-            $flag++;
-        }
-    }
-    return if $flag;
-
-    ### set defaults for all arguments ###
-    my $defs = _hashdefs($tmpl);
-
-    ### check if all keys are valid ###
-    for my $key ( keys %$args ) {
-
-        unless( _iskey( $key, $tmpl ) ) {
-            if( $ALLOW_UNKNOWN ) {
-                $defs->{$key} = $args->{$key} if exists $args->{$key};
-            } else {
-                _store_error(
-                    loc("Key '%1' is not a valid key for %2 provided by %3",
-                        $key, _who_was_it(), _who_was_it(1)),
-                    $verbose
-                );      
-                next;
-            }
-
-        } elsif ( $tmpl->{$key}->{no_override} ) {
-            _store_error(
-                loc( qq[You are not allowed to override key '%1' for %2 from %3],
-                    $key, _who_was_it(), _who_was_it(1)),
-                $verbose
-            );     
-            next;
-        } else {
-
-            ### flag to set if the value was of a wrong type ###
-            my $wrong;
-
-            my $must_be_defined =   $tmpl->{$key}->{'defined'} || 
-                                    $ONLY_ALLOW_DEFINED || 0;
-            if( $must_be_defined ) {
-                $wrong++ if not defined $args->{$key};
-            }
-
-            if( exists $tmpl->{$key}->{allow} ) {
-                
-                $wrong++ unless allow(  $args->{$key}, 
-                                        $tmpl->{$key}->{allow},
-                                        $must_be_defined,
-                                    );
-            }
-
-            if( $STRICT_TYPE || $tmpl->{$key}->{strict_type} ) {
-                $wrong++ unless ref $args->{$key} eq 
-                                ref $tmpl->{$key}->{default};
-            }
-
-            ### somehow it's the wrong type.. warn for this! ###
-            if( $wrong ) {
-                _store_error(
-                    loc(qq[Key '%1' is of invalid type for %2 provided by %3],
-                        $key, _who_was_it(), _who_was_it(1)),
-                    $verbose
-                );     
-                ++$flag && next;
-
-            } else {
-
-                ### if we got here, it's apparently an ok value for $key,
-                ### so we'll set it in the default to return it in a bit
-                
-                $defs->{$key} = $args->{$key};
-            }
-        }
-    }
-
-    ### check if we need to store ###
-    for my $key ( keys %$defs ) {
-        if( my $scalar = $tmpl->{$key}->{store} ) {
-            $$scalar = $defs->{$key};
-            delete $defs->{$key} if $NO_DUPLICATES;
-        }
-    }              
-
-    return $flag ? undef : $defs;
-}
-
-sub allow {
-    my $val                 = shift;
-    my $aref                = shift;
-
-    my $wrong;
-
-    ### it's a string it must equal ###
-    ### this breaks for digits =/
-    unless ( ref $aref ) {
-        $wrong++ unless _safe_eq( $val, $aref );
-
-    } elsif ( ref $aref eq 'Regexp' ) {
-        $wrong++ unless defined $val and $val =~ /$aref/;
-
-    } elsif ( ref $aref eq 'ARRAY' ) {
-        #$wrong++ unless grep { ref $_ eq 'Regexp'
-        #                            ? $val =~ /$_/
-        #                            : _safe_eq($val, $_)
-        #                     } @$aref;
-        $wrong++ unless grep { allow( $val, $_ ) } @$aref;
-
-    } elsif ( ref $aref eq 'CODE' ) {
-        $wrong++ unless $aref->( $val );
-
-    } else {
-        _store_error(
-            loc(qq[Can not do allow checking based on a %1 for %2],
-                ref $aref, _who_was_it()), 1
-        );
-    }
-    return !$wrong;
-}    
-
-### Like check_array, but tmpl is an array and arguments can be given
-### in a positional way; the tmpl order is the argument order.
-sub check_positional {
-    my $atmpl   = shift;
-    my $aref    = shift;
-    my $verbose = shift || $VERBOSE || 0;
-
-    ### reset the error string ###
-    _clear_error();
-
-    my %args;
-    {
-        local $STRIP_LEADING_DASHES = 1;
-        my ($tmpl, $pos, $syn) = _atmpl_to_tmpl_pos_syn($atmpl);
-        
-        if ($#$aref == 1 && ref($aref->[0]) eq 'HASH') {
-        
-            ### Single hashref argument containing actual args.
-            my ($key, $item);
-            while (($key, $item) = each %{ $aref->[0] }) {
-                $key = _canon_key($key);
-                if ($syn->{$key}) {
-                    _store_error(
-                        loc( qq[Synonym used in call to %1], _who_was_it() ),
-                        $verbose
-                    );     
-                    $key = $syn->{$key};
-                }
-                $args{$key} = $item;
-            }
-        
-        } elsif (!($#$aref % 2) && ref($aref->[0]) eq 'SCALAR' &&
-                     $aref->[0] =~ /^-/) {
-            
-            ### List of -KEY => value pairs.
-            while (my $key = (shift @$aref)) {
-                $key = _canon_key($key);
-                if ($syn->{$key}) {
-                    _store_error(
-                        loc( qq[Synonym used in call to %1], _who_was_it() ),
-                        $verbose
-                    );     
-                    $key = $syn->{$key};
-                }
-                $args{_convert_case($key)} = shift @$aref;
-            }
-        } else {
-            ### Positional arguments, yay!
-            while (@$aref) {
-                my $item = shift @$aref;
-                my $key = shift @$pos;
-                if (!$key) {
-                    _store_error(
-                        loc( qq[Too many positional arguments for %1] ,
-                            _who_was_it() ),
-                        $verbose,
-                    );
-                    
-                    ### We ran out of positional arguments, no sense in
-                    ### continuing on.
-                    last;
-                }
-                $args{$key} = $item;
-            }
-        }
-        return check($tmpl, \%args, $verbose);
-    }
-}
-
-### Return a hashref of $tmpl keys with required values
-sub _listreqs {
-    my $tmpl = shift;
-
-    my %hash = map { $_ => 1 } grep { $tmpl->{$_}->{required} } keys %$tmpl;
-    return \%hash;
-}
-
-### Convert template arrayref (keyword, hashref pairs) into straight ###
-### hashref and an (array) mapping of position => keyname ###
-sub _atmpl_to_tmpl_and_pos {
-    my @atmpl = @{ shift @_ };
-
-    my (%tmpl, @positions, %synonyms);
-    while (@atmpl) {
-        
-        my $key = shift @atmpl;
-        my $href = shift @atmpl;
-        
-        push @positions, $key;
-        $tmpl{_convert_case($key)} = $href;
-        
-        for ( @{ $href->{synonyms} || [] } ) {
-            $synonyms{ _convert_case($_) } = $key;
-        };
-        
-        undef $href->{synonyms};
-    };
-    return (\%tmpl, \@positions, \%synonyms);
-}
-
-### Canonicalise key (lowercase, and strip leading dashes if desired) ###
-sub _canon_key {
-    my $key = _convert_case( +shift );
-    $key =~ s/^-// if $STRIP_LEADING_DASHES;
-    return $key;
-}
-
-
-### check if the $key is required, and if so, whether it's in $args ###
-sub _hasreq {
-    my ($key, $tmpl, $args ) = @_;
-    my $reqs = _listreqs($tmpl);
-
-    return $reqs->{$key}
-            ? exists $args->{$key}
-                ? 1
-                : undef
-            : 1;
-}
-
-### Return a hash of $tmpl keys with default values => defaults
-### make sure to even include undefined ones, so that 'exists' will dwym
-sub _hashdefs {
-    my $tmpl = shift;
-
-    my %hash =  map {
-                    $_ => defined $tmpl->{$_}->{default}
-                                ? $tmpl->{$_}->{default}
-                                : undef
-                } keys %$tmpl;
-
-    return \%hash;
-}
-
-### check if the key exists in $data ###
-sub _iskey {
-    my ($key, $tmpl) = @_;
-    return $tmpl->{$key} ? 1 : undef;
-}
-
-sub _who_was_it {
-    my $level = shift || 0;
-
-    return (caller(2 + $level))[3] || 'ANON'
-}
-
-sub _safe_eq {
-    my($a, $b) = @_;
-
-    if ( defined($a) && defined($b) ) {
-        return $a eq $b;
-    }
-    else {
-        return defined($a) eq defined($b);
-    }
-}
-
-sub _sanity_check {
-    my $tmpl = shift;
-    my $rv = {};
-    
-    while( my($key,$href) = each %$tmpl ) {
-        for my $type ( keys %$href ) {
-            unless( grep { $type eq $_ } @known_keys ) {
-                _store_error(
-                    loc(q|Template type '%1' not supported [at key '%2']|, $type, $key), 1, 1
-                );     
-            }               
-        }
-        $rv->{_convert_case($key)} = $href;
-    }
-    return $rv;
-}    
-
-sub _convert_case {
-    my $key = shift;
-    
-    return $PRESERVE_CASE ? $key : lc $key;
-}
-
-{   my $ErrorString = '';
-
-    sub _store_error {
-        my $err     = shift;
-        my $verbose = shift || 0;
-        my $offset  = shift || 0;
-        my $level   = 1 + $offset;
-    
-        local $Carp::CarpLevel = $level;
-        
-        carp $err if $verbose;
-        
-        $ErrorString .= $err . "\n";
-    }
-    
-    sub _clear_error {
-        $ErrorString = '';
-    }
-    
-    sub last_error { $ErrorString }    
-}
-
-1;
-
-__END__
 
 =pod
 
@@ -412,7 +42,7 @@ Params::Check -- A generic input parsing/checking mechanism.
 
 =head1 SYNOPSIS
 
-    use Params::Check qw[check allow];
+    use Params::Check qw[check allow last_error];
 
     sub fill_personal_info {
         my %hash = @_;
@@ -428,11 +58,13 @@ Params::Check -- A generic input parsing/checking mechanism.
             age         => { default    => 21,
                              allow      => qr/^\d+$/,
                            },
-            id_list     => { default    => [],
-                             strict_type => 1
+
+            phone       => { allow => [ sub { return 1 if /$valid_re/ },
+                                        '1-800-PERL' ] 
                            },
-            phone       => { allow => [ sub { return 1 if /$valid_regex/ },
-                                        '1-800-PERL' ] },
+            id_list     => { default        => [],
+                             strict_type    => 1
+                           },
             employer    => { default => 'NSA', no_override => 1 },
         };
 
@@ -490,8 +122,6 @@ Enforce type integrity if required
 Most of Params::Check's power comes from it's template, which we'll
 discuss below:
 
-
-
 =head1 Template
 
 As you can see in the synopsis, based on your template, the arguments
@@ -523,6 +153,14 @@ check to pass.
 This is very usefull if you insist on taking an array reference as
 argument for example.
 
+=item defined
+
+If this template key is true, enforces that if this key is provided by
+user input, it's value is C<defined>. This just means that the user is
+not allowed to pass C<undef> as a value for this key and is equivalent
+to:
+    allow => sub { defined $_[0] && OTHER TESTS }
+
 =item no_override
 
 This allows you to specify C<constants> in your template. ie, they 
@@ -545,54 +183,20 @@ This is basically shorthand for saying:
 
 You can alter the global variable $Params::Check::NO_DUPLICATES to
 control whether the C<store>'d key will still be present in your 
-result yet. See the L<Global Variables> section below.
-
-=item defined
-
-If this template key is true, enforces that if this key is provided by
-user input, it's value is C<defined>. This just means that the user is
-not allowed to pass C<undef> as a value for this key and is equivalent
-to:
-    allow => sub { defined +shift && OTHER TESTS }
+result set. See the L<Global Variables> section below.
 
 =item allow
 
-A set of criteria used to validate a perticular piece of data if it
+A set of criteria used to validate a particular piece of data if it
 has to adhere to particular rules.
-You can use the following types of values for allow:
 
-=over 4
-
-=item string
-
-The provided argument MUST be equal to the string for the validation
-to pass.
-
-=item array ref
-
-The provided argument MUST equal (or match in case of a regular
-expression) one of the elements of the array ref for the validation to
-pass.
-
-=item regexp
-
-The provided argument MUST match the regular expression for the
-validation to pass.
-
-=item subroutine
-
-The provided subroutine MUST return true in order for the validation
-to pass and the argument accepted.
-
-(This is particularly usefull for more complicated data).
-
-=back
+See the C<allow()> function for details.
 
 =back
 
 =head1 Functions
 
-=head2 check
+=head2 check( \%tmpl, \%args, [$verbose] );
 
 This function is not exported by default, so you'll have to ask for it
 via:
@@ -608,7 +212,7 @@ C<check> takes a list of arguments, as follows:
 =item Template
 
 This is a hashreference which contains a template as explained in the
-synopsis.
+C<SYNOPSIS> and C<Template> section.
 
 =item Arguments
 
@@ -619,31 +223,295 @@ This is a reference to a hash of named arguments which need checking.
 A boolean to indicate whether C<check> should be verbose and warn
 about whant went wrong in a check or not.
 
+You can enable this program wide by setting the package variable
+C<$Params::Check::VERBOSE> to a true value. For details, see the
+section on C<Global Variables> below.
+
 =back
 
 C<check> will return when it fails, or a hashref with lowercase
-keys of parsed arguments when it succeeds.
+keys of parsed arguments when it succeeds. 
 
 So a typical call to check would look like this:
 
     my $parsed = check( \%template, \%arguments, $VERBOSE )
-                    or warn q[Arguments could not be parsed!];
+                    or warn q[Arguments could not be parsed!]; 
 
-=head2 allow()
+A lot of the behaviour of C<check()> can be altered by setting
+package variables. See the section on C<Global Variables> for details
+on this.
+
+=cut
+
+sub check {
+    my ($utmpl, $href, $verbose) = @_;
+    
+    ### did we get the arguments we need? ###
+    return if !$utmpl or !$href;
+    
+    ### sensible defaults ###
+    $verbose ||= $VERBOSE || 0;
+    
+    ### clear the current error string ###
+    _clear_error();
+    
+    ### XXX what type of template is it? ###
+    ### { key => { } } ?
+    #if (ref $args eq 'HASH') {
+    #    1;
+    #}
+    
+    ### clean up the template ###
+    my $args = _clean_up_args( $href ) or return;
+
+    ### sanity check + defaults + required keys set? ###
+    my $defs = _sanity_check_and_defaults( $utmpl, $args, $verbose ) 
+                    or return;
+  
+    ### deref only once ###
+    my %utmpl   = %$utmpl;
+    my %args    = %$args;
+    my %defs    = %$defs;
+    
+    ### flag to see if anything went wrong ###
+    my $wrong; 
+    
+    for my $key (keys %args) {
+        
+        ### you gave us this key, but it's not in the template ###
+        unless( $utmpl{$key} ) {
+            
+            ### but we'll allow it anyway ###
+            if( $ALLOW_UNKNOWN ) {
+                $defs{$key} = $args{$key};
+            
+            ### warn about the error ###
+            } else {
+                _store_error(
+                    loc("Key '%1' is not a valid key for %2 provided by %3",
+                        $key, _who_was_it(), _who_was_it(1)), $verbose);
+            }
+            next;
+        }
+
+        ### check if you're even allowed to override this key ###
+        if( $utmpl{$key}->{'no_override'} ) {
+            _store_error(
+                loc(q[You are not allowed to override key '%1'].
+                    q[for %2 from %3], $key, _who_was_it(), _who_was_it(1)),
+                $verbose
+            );     
+            next;
+        }
+        
+        ### copy of this keys template instructions, to save derefs ###
+        my %tmpl = %{$utmpl{$key}};
+        
+        ### check if you were supposed to provide defined() values ###
+        if( ($tmpl{'defined'} || $ONLY_ALLOW_DEFINED) and
+            not defined $args{$key}
+        ) {
+            _store_error(loc(q|Key '%1' must be defined when passed|, $key),
+                $verbose );
+            $wrong ||= 1; 
+            next;
+        }
+
+        ### check if they should be of a strict type, and if it is ###
+        if( ($tmpl{'strict_type'} || $STRICT_TYPE) and
+            (ref $args{$key} ne ref $tmpl{'default'})      
+        ) {
+            _store_error(loc(q|Key '%1' needs to be of type '%2'|, 
+                        $key, ref $tmpl{'default'} || 'SCALAR'), $verbose );    
+            $wrong ||= 1;
+            next;
+        }     
+
+        ### check if we have an allow handler, to validate against ###
+        ### allow() will report it's own errors ###
+        if( exists $tmpl{'allow'} and 
+            not allow($args{$key}, $tmpl{'allow'}) 
+        ) {
+            _store_error(loc(q|Key '%1' is of invalid type for '%2'|.
+                             q|provided by %3|, 
+                            $key, _who_was_it(), _who_was_it(1)), $verbose);
+            $wrong ||= 1;
+            next;
+        }
+    
+        ### we got here, then all must be OK ###
+        $defs{$key} = $args{$key};
+
+    }
+  
+    ### done with our loop... if $wrong is set, somethign went wrong
+    ### and the user is already informed, just return...
+    return if $wrong;
+  
+    ### check if we need to store any of the keys ###
+    ### can't do it before, because something may go wrong later,
+    ### leaving the user with a few set variables
+    for my $key (keys %defs) {
+        if( my $ref = $utmpl{$key}->{'store'} ) {
+            $$ref = $NO_DUPLICATES ? delete $defs{$key} : $defs{$key};
+        }        
+    }
+    
+    return \%defs;
+}
+
+=head2 allow( $test_me, \@criteria );
 
 The function that handles the C<allow> key in the template is also
 available for independant use. 
-
-A typical call would look like this:
-
-    my $ok = allow( $test_me, \@criteria );
 
 The function takes as first argument a key to test against, and
 as second argument any form of criteria that are also allowed by 
 the C<allow> key in the template.
 
+You can use the following types of values for allow:
+
+=over 4
+
+=item string
+
+The provided argument MUST be equal to the string for the validation
+to pass.
+
+=item regexp
+
+The provided argument MUST match the regular expression for the
+validation to pass.
+
+=item subroutine
+
+The provided subroutine MUST return true in order for the validation
+to pass and the argument accepted.
+
+(This is particularly usefull for more complicated data).
+
+=item array ref
+
+The provided argument MUST equal one of the elements of the array 
+ref for the validation to pass. An array ref can hold all the above
+values.
+
+=back
+
 It returns true if the key matched the criteria, or false otherwise.    
+
+=cut
+
+sub allow {
+    ### use $_[0] and $_[1] since this is hot code... ###
+    #my ($val, $ref) = @_;
     
+    ### it's a regexp ###
+    if( ref $_[1] eq 'Regexp' ) {
+        local $^W;  # silence warnings if $val is undef #
+        return if $_[0] !~ /$_[1]/;
+    
+    ### it's a sub ###
+    } elsif ( ref $_[1] eq 'CODE' ) {    
+        return unless $_[1]->( $_[0] );
+
+    ### it's an array ###
+    } elsif ( ref $_[1] eq 'ARRAY' ) {
+        
+        ### loop over the elements, see if one of them says the
+        ### value is OK
+        return unless grep { allow( $_[0], $_ ) } @{$_[1]};
+    
+    ### fall back to a simple, but safe 'eq' ###
+    } else {
+        return unless _safe_eq( $_[0], $_[1] );
+    }
+
+    ### we got here, no failures ###
+    return 1;
+}
+
+### helper functions ###
+
+### clean up the template ###
+sub _clean_up_args {
+    ### don't even bother to loop, if there's nothing to clean up ###
+    return $_[0] if $PRESERVE_CASE and !$STRIP_LEADING_DASHES;
+    
+    my %args = %{$_[0]};
+    
+    ### keys are note aliased ###
+    for my $key (keys %args) {
+        my $org = $key;    
+        $key = lc $key unless $PRESERVE_CASE;
+        $key =~ s/^-// if $STRIP_LEADING_DASHES;
+        $args{$key} = delete $args{$org} if $key ne $org;
+    }
+
+    ### return references so we always return 'true', even on empty
+    ### arguments    
+    return \%args;
+}
+
+sub _sanity_check_and_defaults {
+    my %utmpl   = %{$_[0]};
+    my %args    = %{$_[1]};
+    my $verbose = $_[2]; 
+    
+    my %defs; my $fail;
+    for my $key (keys %utmpl) {
+    
+        ### check if required keys are provided
+        ### keys are now lower cased, unless preserve case was enabled 
+        ### at which point, the utmpl keys must match, but that's the users
+        ### problem.
+        if( $utmpl{$key}->{'required'} and not exists $args{$key} ) {
+            _store_error(
+                loc(q|Required option '%1' is not provided for %2 by %3|,
+                    $key, _who_was_it(1), _who_was_it(2)), $verbose );
+            
+            ### mark the error ###
+            $fail++; 
+            next;
+        }
+        
+        ### next, set the default, make sure the key exists in %defs ###
+        $defs{$key} = $utmpl{$key}->{'default'} || undef;
+
+        if( $SANITY_CHECK_TEMPLATE ) {
+            ### last, check if they provided any weird template keys 
+            ### -- do this last so we don't always execute this code.
+            ### just a small optimization.
+            map {   _store_error(
+                        loc(q|Template type '%1' not supported [at key '%2']|, 
+                        $_, $key), 1, 1 );
+            } grep {
+                not $known_keys{$_}
+            } keys %{$utmpl{$key}};
+        }
+    }
+        
+    ### errors found ###    
+    return if $fail;
+
+    ### return references so we always return 'true', even on empty
+    ### defaults
+    return \%defs;
+}
+
+sub _safe_eq {
+    ### only do a straight 'eq' if they're both defined ###
+    return defined($_[0]) && defined($_[1]) 
+                ? $_[0] eq $_[1] 
+                : defined($_[0]) eq defined($_[1]);
+}
+
+sub _who_was_it {
+    my $level = $_[0] || 0;
+
+    return (caller(2 + $level))[3] || 'ANON'
+}
+
 =head2 last_error()
 
 Returns a string containing all warnings and errors reported during
@@ -654,6 +522,32 @@ C<carp>'ing when the verbose flag is on.
 
 It is exported upon request.
 
+=cut
+
+{   my $ErrorString = '';
+
+    sub _store_error {
+        my($err, $verbose, $offset) = @_[0..2];
+        $verbose ||= 0;
+        $offset  ||= 0;
+        my $level   = 1 + $offset;
+    
+        local $Carp::CarpLevel = $level;
+        
+        carp $err if $verbose;
+        
+        $ErrorString .= $err . "\n";
+    }
+    
+    sub _clear_error {
+        $ErrorString = '';
+    }
+    
+    sub last_error { $ErrorString }    
+}
+
+1;
+
 =head1 Global Variables
 
 The behaviour of Params::Check can be altered by changing the
@@ -661,15 +555,17 @@ following global variables:
 
 =head2 $Params::Check::VERBOSE
 
-This controls whether CPANPLUS::Check::Module will issue warnings and
-explenations as to why certain things may have failed. If you set it
-to 0, Params::Check will not output any warnings.
+This controls whether Params::Check will issue warnings and
+explenations as to why certain things may have failed. 
+If you set it to 0, Params::Check will not output any warnings.
+
 The default is 1 when L<warnings> are enabled, 0 otherwise;
 
 =head2 $Params::Check::STRICT_TYPE
 
 This works like the C<strict_type> option you can pass to C<check>,
 which will turn on C<strict_type> globally for all calls to C<check>.
+
 The default is 0;
 
 =head2 $Params::Check::ALLOW_UNKNOWN
@@ -678,6 +574,7 @@ If you set this flag, unknown options will still be present in the
 return value, rather than filtered out. This is usefull if your
 subroutine is only interested in a few arguments, and wants to pass
 the rest on blindly to perhaps another subroutine.
+
 The default is 0;
 
 =head2 $Params::Check::STRIP_LEADING_DASHES
@@ -705,7 +602,9 @@ case the template provided. This is useful when you want to use
 similar keys with different casing in your templates.
 
 Understand that this removes the case-insensitivy feature of this
-module. Default is 0;
+module. 
+
+Default is 0;
 
 =head2 $Params::Check::ONLY_ALLOW_DEFINED
 
@@ -715,6 +614,17 @@ template option C<defined> instead.
 
 Default is 0;
 
+=head2 $Params::Check::SANITY_CHECK_TEMPLATE
+
+If set to true, L<Params::Check> will sanity check every template 
+provided to valide against for errors and unknown keys. Although very
+usefull for debugging, this can be somewhat slow in hot-code and large
+loops.
+
+To disable this check, set this variable to C<false>.
+
+Default is 1;
+
 =head1 AUTHOR
 
 This module by
@@ -722,13 +632,13 @@ Jos Boumans E<lt>kane@cpan.orgE<gt>.
 
 =head1 Acknowledgements
 
-Thanks to Ann Barcomb for her suggestions and Thomas Wouters for his
-patches to support positional arguments.
+Thanks to Ann Barcomb for her suggestions and Richard Soderberg for
+his performance improvements.
 
 =head1 COPYRIGHT
 
 This module is
-copyright (c) 2003 Jos Boumans E<lt>kane@cpan.orgE<gt>.
+copyright (c) 2003,2004 Jos Boumans E<lt>kane@cpan.orgE<gt>.
 All rights reserved.
 
 This library is free software;
@@ -743,4 +653,3 @@ terms as Perl itself.
 # indent-tabs-mode: nil
 # End:
 # vim: expandtab shiftwidth=4:
-         
