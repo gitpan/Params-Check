@@ -90,7 +90,8 @@ for my $thing (1,'foo',[1]) {
 ### unknown tests ###
 {   
     ### disallow unknowns ###
-    {   my $rv = check( {}, { foo => 42 } );
+    {        
+        my $rv = check( {}, { foo => 42 } );
     
         is_deeply( $rv, {},     "check() call with unknown arguments" ); 
         like( last_error(), qr/^Key 'foo' is not a valid key/,
@@ -239,6 +240,18 @@ for my $thing (1,'foo',[1]) {
         ok(!$rv,                    "check() fails with unalllowed value" );
         like(last_error(), qr/$re/, "   $text" );
     }
+}
+
+### warnings fatal test
+{   my $tmpl = { foo => { allow => sub { 0 } } };
+
+    local $Params::Check::WARNINGS_FATAL = 1;
+
+    eval { check( $tmpl, { foo => 1 } ) };      
+
+    ok( $@,             "Call dies with fatal toggled" );
+    like( $@,           qr/invalid type/,
+                            "   error stored ok" );
 }
 
 ### edge case tests ###
