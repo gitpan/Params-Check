@@ -15,7 +15,7 @@ BEGIN {
     @ISA        =   qw[ Exporter ];
     @EXPORT_OK  =   qw[check allow last_error];
     
-    $VERSION                = 0.04;
+    $VERSION                = 0.05;
     $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
@@ -53,7 +53,8 @@ sub check {
         } else {
             if ( scalar @$href % 2) {
                 _store_error(
-                    loc(qq[Uneven number of arguments passed to %1], _who_was_it()),
+                    loc(qq[Uneven number of arguments passed to %1], 
+                            _who_was_it()),
                     $verbose
                 );     
                 return;
@@ -153,7 +154,7 @@ sub check {
 
 sub allow {
     my $val     = shift;
-    my $aref    = shift or return;
+    my $aref    = shift;
     
     my $wrong;
 
@@ -166,10 +167,11 @@ sub allow {
         $wrong++ unless $val =~ /$aref/;
 
     } elsif ( ref $aref eq 'ARRAY' ) {
-        $wrong++ unless grep { ref $_ eq 'Regexp'
-                                    ? $val =~ /$_/
-                                    : _safe_eq($val, $_)
-                             } @$aref;
+        #$wrong++ unless grep { ref $_ eq 'Regexp'
+        #                            ? $val =~ /$_/
+        #                            : _safe_eq($val, $_)
+        #                     } @$aref;
+        $wrong++ unless grep { allow( $val, $_ ) } @$aref;
 
     } elsif ( ref $aref eq 'CODE' ) {
         $wrong++ unless $aref->( $val );
@@ -397,7 +399,7 @@ Params::Check -- A generic input parsing/checking mechanism.
 
 =head1 SYNOPSIS
 
-    use Params::Check qw[check];
+    use Params::Check qw[check allow];
 
     sub fill_personal_info {
         my %hash = @_;
@@ -416,18 +418,22 @@ Params::Check -- A generic input parsing/checking mechanism.
             id_list     => { default    => [],
                              strict_type => 1
                            },
-            phone       => { allow => sub {
-                                    my %args = @_; 
-                                    return 1 
-                                        if &valid($args{phone});
-                                }
-                            },
+            phone       => { allow => [ sub { return 1 if /$valid_regex/ },
+                                        '1-800-PERL' ] },
             employer    => { default => 'NSA', no_override => 1 },
-            }
         };
 
+        ### check() returns a hashref of parsed args on success ###
         my $parsed_args = check( $tmpl, \%hash, $VERBOSE )
-                            or die [Could not parse arguments!];
+                            or die qw[Could not parse arguments!];
+
+        ... other code here ...
+    }       
+
+    my $ok = allow( $colour, [qw|blue green yellow|] );
+
+    my $error = Params::Check::last_error();
+
 
 =head1 DESCRIPTION
 
@@ -693,7 +699,7 @@ patches to support positional arguments.
 =head1 COPYRIGHT
 
 This module is
-copyright (c) 2002 Jos Boumans E<lt>kane@cpan.orgE<gt>.
+copyright (c) 2003 Jos Boumans E<lt>kane@cpan.orgE<gt>.
 All rights reserved.
 
 This library is free software;
