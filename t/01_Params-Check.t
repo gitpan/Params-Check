@@ -103,7 +103,7 @@ for my $thing (1,'foo',[1]) {
         my $rv = check( {}, { foo => 42 } );        
         
         is_deeply( $rv, { foo => 42 },
-                                "check call() with unknown arguments allowed" );
+                                "check call() with unknown args allowed" );
     }
 }
 
@@ -224,7 +224,20 @@ for my $thing (1,'foo',[1]) {
         };
         
         my $rv = check( $tmpl, { foo => $thing } );
-         ok( $rv,                    "check() call using allow key" );  
+        ok( $rv,                    "check() call using allow key" );  
+    }
+}
+
+### invalid key tests 
+{   my $tmpl = { foo => { allow => sub { 0 } } };
+    
+    for my $val ( 1, 'foo', [], bless({},__PACKAGE__) ) {
+        my $rv      = check( $tmpl, { foo => $val } );
+        my $text    = "Key 'foo' ($val) is of invalid type";
+        my $re      = quotemeta $text;
+        
+        ok(!$rv,                    "check() fails with unalllowed value" );
+        like(last_error(), qr/$re/, "   $text" );
     }
 }
 

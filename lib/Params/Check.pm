@@ -18,7 +18,7 @@ BEGIN {
     @ISA        =   qw[ Exporter ];
     @EXPORT_OK  =   qw[check allow last_error];
     
-    $VERSION                = '0.21';
+    $VERSION                = '0.22';
     $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
@@ -332,9 +332,12 @@ sub check {
         if( exists $tmpl{'allow'} and 
             not allow($args{$key}, $tmpl{'allow'}) 
         ) {
-            _store_error(loc(q|Key '%1' is of invalid type for '%2'|.
-                             q|provided by %3|, 
-                            $key, _who_was_it(), _who_was_it(1)), $verbose);
+            ### stringify the value in the error report -- we don't want dumps
+            ### of objects, but we do want to see *roughly* what we passed
+            _store_error(loc(q|Key '%1' (%2) is of invalid type for '%3'|.
+                             q|provided by %4|, 
+                            $key, "$args{$key}", _who_was_it(),
+                            _who_was_it(1)), $verbose);
             $wrong ||= 1;
             next;
         }

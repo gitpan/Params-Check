@@ -1,3 +1,10 @@
+Changes for 0.22    Thu Nov 11 11:11:33 2004
+============================================
+
+* Make error reporting of invalid keys contain
+    the stringified version of the disallowed
+    value.
+
 Changes for 0.21    Fri Jun 18 18:38:21 2004
 ============================================
 
