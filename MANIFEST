@@ -1,5 +1,6 @@
 Makefile.PL
 MANIFEST
 README
+CHANGES
 lib/Params/Check.pm
 t/01_Params-Check.t

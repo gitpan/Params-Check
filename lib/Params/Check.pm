@@ -8,29 +8,33 @@ use Locale::Maketext::Simple Style => 'gettext';
 BEGIN {
     use Exporter    ();
     use vars        qw[ @ISA $VERSION @EXPORT_OK $VERBOSE $ALLOW_UNKNOWN 
-                        $STRICT_TYPE $STRIP_LEADING_DASHES $NO_DUPLICATES];
+                        $STRICT_TYPE $STRIP_LEADING_DASHES $NO_DUPLICATES
+                        $PRESERVE_CASE
+                    ];
 
     @ISA        =   qw[ Exporter ];
     @EXPORT_OK  =   qw[check];
     
-    $VERSION                = 0.02;
-    $VERBOSE                = 1;
+    $VERSION                = 0.03;
+    $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
     $STRICT_TYPE            = 0;
     $ALLOW_UNKNOWN          = 0;
+    $PRESERVE_CASE          = 0;
 }
 
 
 my @known_keys = qw|required allow default strict_type no_override store|;
 
 sub check {
-    my $tmpl    = shift;
+    my $utmpl   = shift;
     my $href    = shift;
     my $verbose = shift || $VERBOSE || 0;
 
-    ### check for weird things in the template and warn ###
-    _sanity_check($tmpl);
+    ### check for weird things in the template and warn
+    ### also convert template keys to lowercase if required
+    my $tmpl = _sanity_check($utmpl);
 
     ### lowercase all args, and handle both hashes and hashrefs ###
     my $args = {};
@@ -197,7 +201,7 @@ sub check_positional {
                         if $verbose;
                     $key = $syn->{$key};
                 }
-                $args{lc $key} = shift @$aref;
+                $args{_convert_case($key)} = shift @$aref;
             }
         } else {
             ### Positional arguments, yay!
@@ -239,10 +243,10 @@ sub _atmpl_to_tmpl_and_pos {
         my $href = shift @atmpl;
         
         push @positions, $key;
-        $tmpl{lc $key} = $href;
+        $tmpl{_convert_case($key)} = $href;
         
         for ( @{ $href->{synonyms} || [] } ) {
-            $synonyms{lc $_} = $key;
+            $synonyms{ _convert_case($_) } = $key;
         };
         
         undef $href->{synonyms};
@@ -252,7 +256,7 @@ sub _atmpl_to_tmpl_and_pos {
 
 ### Canonicalise key (lowercase, and strip leading dashes if desired) ###
 sub _canon_key {
-    my $key = lc shift;
+    my $key = _convert_case( +shift );
     $key =~ s/^-// if $STRIP_LEADING_DASHES;
     return $key;
 }
@@ -309,6 +313,7 @@ sub _safe_eq {
 
 sub _sanity_check {
     my $tmpl = shift;
+    my $rv = {};
     
     while( my($key,$href) = each %$tmpl ) {
         for my $type ( keys %$href ) {
@@ -316,9 +321,17 @@ sub _sanity_check {
                 warn loc(q|Template type '%1' not supported [at key '%2']|, $type, $key);
             }               
         }
+        $rv->{_convert_case($key)} = $href;
     }
-    return;
+    return $rv;
 }    
+
+sub _convert_case {
+    my $key = shift;
+    
+    return $PRESERVE_CASE ? $key : lc $key;
+}
+
 1;
 
 __END__
@@ -370,7 +383,7 @@ Params::Check is a generic input parsing/checking mechanism.
 It allows you to validate input via a template. The only requirement
 is that the arguments must be named.
 
-Params::Check will do the following things for you:
+Params::Check can do the following things for you:
 
 =over 4
 
@@ -449,11 +462,11 @@ C<Params::Check> template.
 
 This allows you to pass a reference to a scalar, in which the data
 will be stored:
+    
     my $x;
-    my $args = check($foo => { default => 1, store => \$x }, $input);
+    my $args = check(foo => { default => 1, store => \$x }, $input);
 
-
- This is basically shorthand for saying:
+This is basically shorthand for saying:
 
     my $args = check( { foo => { default => 1 }, $input );
     my $x    = $args->{foo};   
@@ -549,7 +562,7 @@ following global variables:
 This controls whether CPANPLUS::Check::Module will issue warnings and
 explenations as to why certain things may have failed. If you set it
 to 0, Params::Check will not output any warnings.
-The default is 1;
+The default is 1 when L<warnings> are enabled, 0 otherwise;
 
 =head2 $Params::Check::STRICT_TYPE
 
@@ -573,7 +586,7 @@ If you set this flag, all keys passed in the following manner:
     
 will have their leading dashes stripped.     
 
-=head2 $Param::Check::NO_DUPLICATES
+=head2 $Params::Check::NO_DUPLICATES
 
 If set to true, all keys in the template that are marked as to be
 stored in a scalar, will also be removed from the result set.
@@ -581,6 +594,16 @@ stored in a scalar, will also be removed from the result set.
 Default is false, meaning that when you use C<store> as a template
 key, C<check> will put it both in the scalar you supplied, as well as
 in the hashref it returns.
+
+=head2 $Params::Check::PRESERVE_CASE
+
+If set to true, L<Params::Check> will no longer convert all keys from
+the user input to lowercase, but instead expect them to be in the 
+case the template provided. This is useful when you want to use 
+similar keys with different casing in your templates.
+
+Understand that this removes the case-insensitivy feature of this
+module. Default is 1;
 
 =head1 AUTHOR
 

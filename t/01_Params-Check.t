@@ -1,7 +1,7 @@
 ### Params::Check test suite ###
 
 use strict;
-use Test::More 'no_plan'; #tests => 23;
+use Test::More tests => 30;
 
 $^W=1;
 
@@ -284,4 +284,22 @@ sub valid_phone {
         is(defined $args->{firstname}, !$_,qq[$what in result set]    );  
     }
 }
+
+### $PRESERVE_CASE check ###
+{
+    my $tmpl =  { Foo => { default => 1 } };
+    my $try =   { FOO => 2 };
+
+    for (0..1) {
+        local $Params::Check::PRESERVE_CASE = $_;
+    
+        my $expect = $_ ? { Foo => 1 } : { foo => 2 };
+        my $state =  $_ ? "" : " not";
+    
+        my $rv = check( $tmpl, $try );
+        is_deeply( $rv, $expect,   "Check while". $state ." preserving case" ); 
+    }               
+}
+
+
 
