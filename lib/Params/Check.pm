@@ -15,7 +15,7 @@ BEGIN {
     @ISA        =   qw[ Exporter ];
     @EXPORT_OK  =   qw[check allow last_error];
     
-    $VERSION                = 0.06;
+    $VERSION                = 0.07;
     $VERBOSE                = $^W ? 1 : 0;
     $NO_DUPLICATES          = 0;
     $STRIP_LEADING_DASHES   = 0;
@@ -177,7 +177,7 @@ sub allow {
         $wrong++ unless _safe_eq( $val, $aref );
 
     } elsif ( ref $aref eq 'Regexp' ) {
-        $wrong++ unless $val =~ /$aref/;
+        $wrong++ unless defined $val and $val =~ /$aref/;
 
     } elsif ( ref $aref eq 'ARRAY' ) {
         #$wrong++ unless grep { ref $_ eq 'Regexp'
