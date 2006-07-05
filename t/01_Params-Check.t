@@ -261,6 +261,17 @@ use constant TRUE   => sub { 1 };
                             "   error stored ok" );
 }
 
+### store => \$foo tests
+{   ### quell warnings
+    local $SIG{__WARN__} = sub {};
+    
+    my $tmpl = { foo => { store => '' } };
+    check( $tmpl, {} );
+    
+    my $re = quotemeta q|Store variable for 'foo' is not a reference!|;
+    like(last_error(), qr/$re/, "Caught non-reference 'store' variable" );
+}    
+
 ### edge case tests ###
 {   ### if key is not provided, and value is '', will P::C treat
     ### that correctly? 
@@ -318,4 +329,21 @@ use constant TRUE   => sub { 1 };
     is_deeply( $rv, $get,   "   found provided values in rv" );
     is( $rv->{lastname}, $lastname, 
                             "   found provided values in rv" );
+}
+
+### $Params::Check::CALLER_DEPTH test
+{
+    sub wrapper { check  ( @_ ) };
+    sub inner   { wrapper( @_ ) };
+    sub outer   { inner  ( @_ ) };
+    outer( { dummy => { required => 1 }}, {} );
+
+    like( last_error, qr/for .*::wrapper by .*::inner$/,
+                            "wrong caller without CALLER_DEPTH" );
+
+    local $Params::Check::CALLER_DEPTH = 1;
+    outer( { dummy => { required => 1 }}, {} );
+
+    like( last_error, qr/for .*::inner by .*::outer$/,
+                            "right caller with CALLER_DEPTH" );
 }
