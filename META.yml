@@ -1,12 +1,24 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         Params-Check
-version:      0.26
-version_from: lib/Params/Check.pm
-installdirs:  site
+---
+name: Params-Check
+version: 1.00
+author:
+  - 'M J Pearce <fluffy@cpan.org>'
+abstract: function signature checking via attributes
+license: perl
+resources:
+  license: http://dev.perl.org/licenses/
 requires:
-    Locale::Maketext::Simple:      0
-    Test::More:                    0
-
-distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.30
+  Attribute::Handlers: 0.79
+  Carp: 0
+  List::Util: 1.19
+  Params::Validate: 0.91
+  Scalar::Util: 1.19
+  perl: 5.10.0
+provides:
+  Params::Check:
+    file: lib/Params/Check.pm
+    version: 1.00
+generated_by: Module::Build version 0.280801
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2
