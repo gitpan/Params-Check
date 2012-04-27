@@ -22,4 +22,4 @@ requires:
   Test::More: 0
 resources:
   repository: https://github.com/jib/params-check
-version: 0.34
+version: 0.36
